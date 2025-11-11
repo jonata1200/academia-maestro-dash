@@ -1,119 +1,105 @@
+# analysis/aulas_analysis.py
+
 import pandas as pd
-from sqlalchemy import create_engine
-from config.settings import DATABASE_PATH
 
 class AulasAnalysis:
-    def __init__(self, db_path=DATABASE_PATH):
+    def __init__(self, data_handler):
         """
-        Inicializa a classe de análise de aulas, conectando ao banco de dados.
+        Inicializa a classe de análise de aulas, recebendo o DataHandler.
         """
-        self.engine = create_engine(f'sqlite:///{db_path}')
-        print(f"Conectado ao banco de dados em: {db_path}")
+        self.handler = data_handler
+        print("Analisador de Aulas (Modo Pandas) inicializado.")
 
     def get_total_aulas_por_status(self, ano):
         """
         Retorna o total de aulas agendadas por status (Agendada, Concluída, Cancelada) para um dado ano.
+        Lógica SQL: SELECT status, COUNT(id) FROM agenda_aulas WHERE YEAR(data_aula) = ano GROUP BY status.
         """
-        query = f"""
-        SELECT
-            status,
-            COUNT(id) AS total_aulas
-        FROM agenda_aulas
-        WHERE strftime('%Y', data_aula) = '{ano}'
-        GROUP BY status;
-        """
-        with self.engine.connect() as connection:
-            df = pd.read_sql(query, connection)
-        return df
+        df_agenda = self.handler.get_data('agenda_aulas')
+        if df_agenda.empty:
+            return pd.DataFrame(columns=['status', 'total_aulas'])
+
+        # Garante que a coluna de data é do tipo datetime
+        df_agenda['data_aula'] = pd.to_datetime(df_agenda['data_aula'])
+        
+        # 1. Filtra o DataFrame pelo ano desejado
+        df_ano = df_agenda[df_agenda['data_aula'].dt.year == int(ano)]
+        
+        # 2. Agrupa por 'status' e conta o número de ocorrências
+        resultado = df_ano.groupby('status').size().reset_index(name='total_aulas')
+        
+        return resultado
 
     def get_popularidade_instrumentos(self):
         """
         Retorna a popularidade dos instrumentos com base no número de aulas agendadas.
+        Lógica SQL: SELECT i.nome_instrumento, COUNT(aa.id) FROM agenda_aulas aa JOIN instrumentos i ON aa.instrumento_id = i.id GROUP BY i.nome_instrumento.
         """
-        query = """
-        SELECT
-            i.nome_instrumento,
-            COUNT(aa.id) AS total_aulas_agendadas
-        FROM agenda_aulas aa
-        JOIN instrumentos i ON aa.instrumento_id = i.id
-        GROUP BY i.nome_instrumento
-        ORDER BY total_aulas_agendadas DESC;
-        """
-        with self.engine.connect() as connection:
-            df = pd.read_sql(query, connection)
-        return df
+        df_agenda = self.handler.get_data('agenda_aulas')
+        df_instrumentos = self.handler.get_data('instrumentos')
+
+        if df_agenda.empty or df_instrumentos.empty:
+            return pd.DataFrame(columns=['nome_instrumento', 'total_aulas_agendadas'])
+
+        # 1. Junta (merge) os dois DataFrames
+        df_merged = pd.merge(df_agenda, df_instrumentos, left_on='instrumento_id', right_on='id')
+
+        # 2. Agrupa pelo nome do instrumento e conta as aulas
+        resultado = df_merged.groupby('nome_instrumento').size().reset_index(name='total_aulas_agendadas')
+        
+        # 3. Ordena do mais popular para o menos popular
+        return resultado.sort_values('total_aulas_agendadas', ascending=False)
 
     def get_aulas_por_professor(self, ano):
         """
         Retorna o número de aulas concluídas por professor para um dado ano.
+        Lógica SQL: SELECT p.nome, COUNT(aa.id) FROM agenda_aulas aa JOIN professores p ON ... WHERE aa.status = 'Concluída' AND YEAR(data_aula) = ano GROUP BY p.nome.
         """
-        query = f"""
-        SELECT
-            p.nome AS nome_professor,
-            COUNT(aa.id) AS aulas_concluidas
-        FROM agenda_aulas aa
-        JOIN professores p ON aa.professor_id = p.id
-        WHERE aa.status = 'Concluída' AND strftime('%Y', data_aula) = '{ano}'
-        GROUP BY p.nome
-        ORDER BY aulas_concluidas DESC;
-        """
-        with self.engine.connect() as connection:
-            df = pd.read_sql(query, connection)
-        return df
+        df_agenda = self.handler.get_data('agenda_aulas')
+        df_professores = self.handler.get_data('professores')
+
+        if df_agenda.empty or df_professores.empty:
+            return pd.DataFrame(columns=['nome_professor', 'aulas_concluidas'])
+
+        df_agenda['data_aula'] = pd.to_datetime(df_agenda['data_aula'])
+        
+        # 1. Filtra a agenda por aulas 'Concluída' e pelo ano
+        filtro = (df_agenda['status'] == 'Concluída') & (df_agenda['data_aula'].dt.year == int(ano))
+        df_agenda_filtrada = df_agenda[filtro]
+
+        # 2. Junta com o DataFrame de professores
+        df_merged = pd.merge(df_agenda_filtrada, df_professores, left_on='professor_id', right_on='id')
+        
+        # 3. Agrupa pelo nome do professor e conta as aulas
+        resultado = df_merged.groupby('nome').size().reset_index(name='aulas_concluidas')
+        resultado = resultado.rename(columns={'nome': 'nome_professor'})
+        
+        return resultado.sort_values('aulas_concluidas', ascending=False)
 
     def get_ocupacao_horarios_professor(self, professor_id=None, ano='2024'):
         """
-        Analisa a ocupação de horários. Para simplificar, conta a média de aulas por dia útil.
-        Pode ser expandido para analisar slots específicos.
+        Analisa a ocupação de horários, contando a média de aulas por dia útil.
         """
-        base_query = f"""
-        SELECT
-            strftime('%Y-%m-%d', data_aula) AS dia,
-            COUNT(id) AS aulas_no_dia
-        FROM agenda_aulas
-        WHERE strftime('%Y', data_aula) = '{ano}'
-        """
+        df_agenda = self.handler.get_data('agenda_aulas')
+        if df_agenda.empty:
+            return 0
+
+        df_agenda['data_aula'] = pd.to_datetime(df_agenda['data_aula'])
+        
+        # 1. Filtra por ano
+        df_filtrada = df_agenda[df_agenda['data_aula'].dt.year == int(ano)]
+        
+        # 2. Filtro opcional por professor
         if professor_id:
-            base_query += f" AND professor_id = {professor_id}"
-        base_query += " GROUP BY dia ORDER BY dia;"
+            df_filtrada = df_filtrada[df_filtrada['professor_id'] == int(professor_id)]
 
-        with self.engine.connect() as connection:
-            df = pd.read_sql(base_query, connection)
-
-        if not df.empty:
-            media_aulas_dia = df['aulas_no_dia'].mean()
-            return media_aulas_dia
-        return 0
-
-    def run_all_analysis(self, ano_referencia='2024'):
-        """
-        Executa todas as análises de aulas e imprime os resultados.
-        """
-        print("\n--- Análise de Aulas ---")
-
-        total_aulas_status = self.get_total_aulas_por_status(ano_referencia)
-        print(f"\nTotal de aulas por status ({ano_referencia}):")
-        print(total_aulas_status)
-
-        popularidade_instr = self.get_popularidade_instrumentos()
-        print("\nPopularidade dos instrumentos (por aulas agendadas):")
-        print(popularidade_instr)
-
-        aulas_prof = self.get_aulas_por_professor(ano_referencia)
-        print(f"\nAulas concluídas por professor ({ano_referencia}):")
-        print(aulas_prof)
-
-        ocupacao_geral = self.get_ocupacao_horarios_professor(ano=ano_referencia)
-        print(f"\nMédia de aulas por dia com agendamentos em {ano_referencia}: {ocupacao_geral:.2f}")
-
-# Exemplo de uso:
-if __name__ == "__main__":
-    try:
-        from config.settings import DATABASE_PATH
-    except ImportError:
-        print("Erro: config/settings.py não encontrado ou DATABASE_PATH não definido.")
-        print("Por favor, crie config/settings.py com 'DATABASE_PATH = \"db/maestro.db\"'")
-        exit()
-
-    analisador = AulasAnalysis()
-    analisador.run_all_analysis(ano_referencia='2024')
+        if df_filtrada.empty:
+            return 0
+            
+        # 3. Conta aulas por dia
+        aulas_por_dia = df_filtrada.groupby(df_filtrada['data_aula'].dt.date).size()
+        
+        # 4. Calcula a média
+        media_aulas_dia = aulas_por_dia.mean()
+        
+        return media_aulas_dia if pd.notna(media_aulas_dia) else 0

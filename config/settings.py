@@ -4,18 +4,19 @@ from dotenv import load_dotenv
 # Carrega as variáveis de ambiente do arquivo .env
 load_dotenv()
 
-# Caminho para o banco de dados SQLite
-DATABASE_PATH = os.getenv("DATABASE_PATH", "db/maestro.db")
+# Caminho para o "banco de dados" em formato Excel
+# Teremos um único arquivo com várias abas (sheets)
+DATA_XLSX_PATH = os.getenv("DATA_XLSX_PATH", "data/academia_maestro_dados.xlsx")
 
-# Outras configurações podem ser adicionadas aqui
-# Ex: diretório base para arquivos de dados CSV
-DATA_BASE_PATH = os.getenv("DATA_PATH", "data")
+# Nomes das abas que usaremos no arquivo Excel
+# Usar constantes evita erros de digitação no resto do código
+SHEET_ALUNOS = "alunos"
+SHEET_PROFESSORES = "professores"
+SHEET_INSTRUMENTOS = "instrumentos"
+SHEET_AULAS_OFERTADAS = "aulas_ofertadas"
+SHEET_MATRICULAS = "matriculas"
+SHEET_AGENDA = "agenda_aulas"
+SHEET_PAGAMENTOS = "pagamentos"
 
-# Preço padrão para uma aula individual
+# Outras configurações podem ser mantidas
 PRECO_AULA_INDIVIDUAL = float(os.getenv("PRECO_AULA_INDIVIDUAL", "250.00"))
-
-# Instrumentos suportados (pode ser carregado do DB depois)
-INSTRUMENTS = ["Violão", "Teclado", "Guitarra", "Bateria", "Violino"]
-
-# Status de aulas
-AULA_STATUS = ["Agendada", "Concluída", "Cancelada"]

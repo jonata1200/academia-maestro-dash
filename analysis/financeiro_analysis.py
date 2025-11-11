@@ -1,124 +1,116 @@
+# analysis/financeiro_analysis.py
+
 import pandas as pd
-from sqlalchemy import create_engine
-from config.settings import DATABASE_PATH
 
 class FinanceiroAnalysis:
-    def __init__(self, db_path=DATABASE_PATH):
+    def __init__(self, data_handler):
         """
-        Inicializa a classe de análise financeira, conectando ao banco de dados.
+        Inicializa a classe de análise financeira, recebendo o DataHandler.
         """
-        self.engine = create_engine(f'sqlite:///{db_path}')
-        print(f"Conectado ao banco de dados em: {db_path}")
+        self.handler = data_handler
+        print("Analisador Financeiro (Modo Pandas) inicializado.")
 
     def get_faturamento_total_por_mes(self, ano):
         """
         Calcula o faturamento total por mês (considerando pagamentos concluídos).
+        Lógica SQL: SELECT MONTH(data_pagamento), SUM(valor_pago) FROM pagamentos WHERE YEAR(...) AND status = 'Pago' GROUP BY MONTH(...).
         """
-        query = f"""
-        SELECT
-            strftime('%Y-%m', data_pagamento) AS mes,
-            SUM(valor_pago) AS faturamento_mensal
-        FROM pagamentos
-        WHERE strftime('%Y', data_pagamento) = '{ano}' AND status = 'Pago'
-        GROUP BY mes
-        ORDER BY mes;
-        """
-        with self.engine.connect() as connection:
-            df = pd.read_sql(query, connection)
-        return df
+        df_pagamentos = self.handler.get_data('pagamentos')
+        if df_pagamentos.empty:
+            return pd.DataFrame(columns=['mes', 'faturamento_mensal'])
+
+        df_pagamentos['data_pagamento'] = pd.to_datetime(df_pagamentos['data_pagamento'])
+
+        # 1. Filtra por ano e status 'Pago'
+        filtro = (df_pagamentos['data_pagamento'].dt.year == int(ano)) & (df_pagamentos['status'] == 'Pago')
+        df_filtrado = df_pagamentos[filtro].copy()
+
+        if df_filtrado.empty:
+            return pd.DataFrame(columns=['mes', 'faturamento_mensal'])
+
+        # 2. Cria uma coluna 'mes' para o agrupamento
+        df_filtrado['mes'] = df_filtrado['data_pagamento'].dt.strftime('%Y-%m')
+        
+        # 3. Agrupa por mês e soma o valor pago
+        resultado = df_filtrado.groupby('mes')['valor_pago'].sum().reset_index(name='faturamento_mensal')
+        
+        return resultado.sort_values('mes')
 
     def get_faturamento_por_instrumento(self, ano):
         """
         Calcula o faturamento gerado por cada tipo de instrumento (aula).
-        Assume que o pagamento está ligado à agenda_aulas e que a agenda_aulas
-        tem o instrumento_id.
         """
-        query = f"""
-        SELECT
-            i.nome_instrumento,
-            SUM(p.valor_pago) AS faturamento_instrumento
-        FROM pagamentos p
-        JOIN agenda_aulas aa ON p.referencia_aula_id = aa.id -- Assumindo 1 pagamento por aula agendada
-        JOIN instrumentos i ON aa.instrumento_id = i.id
-        WHERE strftime('%Y', p.data_pagamento) = '{ano}' AND p.status = 'Pago'
-        GROUP BY i.nome_instrumento
-        ORDER BY faturamento_instrumento DESC;
-        """
-        with self.engine.connect() as connection:
-            df = pd.read_sql(query, connection)
-        return df
+        df_pagamentos = self.handler.get_data('pagamentos')
+        df_agenda = self.handler.get_data('agenda_aulas')
+        df_instrumentos = self.handler.get_data('instrumentos')
+
+        if df_pagamentos.empty or df_agenda.empty or df_instrumentos.empty:
+            return pd.DataFrame()
+
+        df_pagamentos['data_pagamento'] = pd.to_datetime(df_pagamentos['data_pagamento'])
+        
+        # 1. Filtra pagamentos por ano e status
+        filtro = (df_pagamentos['data_pagamento'].dt.year == int(ano)) & (df_pagamentos['status'] == 'Pago')
+        pagamentos_validos = df_pagamentos[filtro]
+
+        # 2. Junta pagamentos com agenda e depois com instrumentos
+        merge1 = pd.merge(pagamentos_validos, df_agenda, left_on='referencia_aula_id', right_on='id')
+        merge2 = pd.merge(merge1, df_instrumentos, left_on='instrumento_id', right_on='id')
+        
+        # 3. Agrupa por nome do instrumento e soma os valores
+        resultado = merge2.groupby('nome_instrumento')['valor_pago'].sum().reset_index(name='faturamento_instrumento')
+        
+        return resultado.sort_values('faturamento_instrumento', ascending=False)
 
     def get_top_alunos_faturamento(self, top_n=5, ano='2024'):
         """
         Retorna os alunos que mais contribuíram para o faturamento.
         """
-        query = f"""
-        SELECT
-            a.nome AS nome_aluno,
-            SUM(p.valor_pago) AS total_gasto
-        FROM pagamentos p
-        JOIN alunos a ON p.aluno_id = a.id
-        WHERE strftime('%Y', p.data_pagamento) = '{ano}' AND p.status = 'Pago'
-        GROUP BY a.nome
-        ORDER BY total_gasto DESC
-        LIMIT {top_n};
-        """
-        with self.engine.connect() as connection:
-            df = pd.read_sql(query, connection)
-        return df
+        df_pagamentos = self.handler.get_data('pagamentos')
+        df_alunos = self.handler.get_data('alunos')
+
+        if df_pagamentos.empty or df_alunos.empty:
+            return pd.DataFrame()
+
+        df_pagamentos['data_pagamento'] = pd.to_datetime(df_pagamentos['data_pagamento'])
+        
+        # 1. Filtra pagamentos
+        filtro = (df_pagamentos['data_pagamento'].dt.year == int(ano)) & (df_pagamentos['status'] == 'Pago')
+        pagamentos_validos = df_pagamentos[filtro]
+
+        # 2. Junta com alunos
+        df_merged = pd.merge(pagamentos_validos, df_alunos, left_on='aluno_id', right_on='id')
+        
+        # 3. Agrupa por nome do aluno e soma os gastos
+        resultado = df_merged.groupby('nome')['valor_pago'].sum().reset_index(name='total_gasto')
+        
+        # 4. Ordena e pega o 'top N'
+        resultado = resultado.sort_values('total_gasto', ascending=False)
+        return resultado.head(top_n)
 
     def get_faturamento_por_professor(self, ano='2024'):
         """
         Calcula o faturamento (receita bruta) gerado por cada professor.
-        Assume que o pagamento está ligado à agenda_aulas, que tem o professor_id.
         """
-        query = f"""
-        SELECT
-            pr.nome AS nome_professor,
-            SUM(p.valor_pago) AS faturamento_professor
-        FROM pagamentos p
-        JOIN agenda_aulas aa ON p.referencia_aula_id = aa.id
-        JOIN professores pr ON aa.professor_id = pr.id
-        WHERE strftime('%Y', p.data_pagamento) = '{ano}' AND p.status = 'Pago'
-        GROUP BY pr.nome
-        ORDER BY faturamento_professor DESC;
-        """
-        with self.engine.connect() as connection:
-            df = pd.read_sql(query, connection)
-        return df
+        df_pagamentos = self.handler.get_data('pagamentos')
+        df_agenda = self.handler.get_data('agenda_aulas')
+        df_professores = self.handler.get_data('professores')
+        
+        if df_pagamentos.empty or df_agenda.empty or df_professores.empty:
+            return pd.DataFrame()
+        
+        df_pagamentos['data_pagamento'] = pd.to_datetime(df_pagamentos['data_pagamento'])
+        
+        # 1. Filtra pagamentos
+        filtro = (df_pagamentos['data_pagamento'].dt.year == int(ano)) & (df_pagamentos['status'] == 'Pago')
+        pagamentos_validos = df_pagamentos[filtro]
 
-
-    def run_all_analysis(self, ano_referencia='2024'):
-        """
-        Executa todas as análises financeiras e imprime os resultados.
-        """
-        print("\n--- Análise Financeira ---")
-
-        faturamento_mensal = self.get_faturamento_total_por_mes(ano_referencia)
-        print(f"\nFaturamento total por mês ({ano_referencia}):")
-        print(faturamento_mensal)
-
-        faturamento_instrumento = self.get_faturamento_por_instrumento(ano_referencia)
-        print(f"\nFaturamento por instrumento ({ano_referencia}):")
-        print(faturamento_instrumento)
-
-        top_alunos = self.get_top_alunos_faturamento(ano=ano_referencia)
-        print(f"\nTop 5 alunos por faturamento ({ano_referencia}):")
-        print(top_alunos)
-
-        faturamento_professor = self.get_faturamento_por_professor(ano=ano_referencia)
-        print(f"\nFaturamento gerado por professor ({ano_referencia}):")
-        print(faturamento_professor)
-
-
-# Exemplo de uso:
-if __name__ == "__main__":
-    try:
-        from config.settings import DATABASE_PATH
-    except ImportError:
-        print("Erro: config/settings.py não encontrado ou DATABASE_PATH não definido.")
-        print("Por favor, crie config/settings.py com 'DATABASE_PATH = \"db/maestro.db\"'")
-        exit()
-
-    analisador = FinanceiroAnalysis()
-    analisador.run_all_analysis(ano_referencia='2024')
+        # 2. Junta pagamentos -> agenda -> professores
+        merge1 = pd.merge(pagamentos_validos, df_agenda, left_on='referencia_aula_id', right_on='id')
+        merge2 = pd.merge(merge1, df_professores, left_on='professor_id', right_on='id')
+        
+        # 3. Agrupa por nome do professor e soma os valores
+        resultado = merge2.groupby('nome')['valor_pago'].sum().reset_index(name='faturamento_professor')
+        resultado = resultado.rename(columns={'nome': 'nome_professor'})
+        
+        return resultado.sort_values('faturamento_professor', ascending=False)
