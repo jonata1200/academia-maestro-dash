@@ -1,0 +1,15 @@
+# Ignora cache do Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Ignora ambiente virtual (se houver)
+.venv/
+.env/
+.env*/ 
+
+# Ignora arquivos temporários e logs
+*.log
+*.tmp
+*.bak
+.DS_Store

@@ -1,0 +1,6 @@
+python-dotenv
+pandas
+sqlalchemy
+dash
+dash-bootstrap-components
+plotly
