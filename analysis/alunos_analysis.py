@@ -1,51 +1,49 @@
+# analysis/alunos_analysis.py
+
 import pandas as pd
 
 class AlunosAnalysis:
     def __init__(self, data_handler):
-        """Inicializa a classe de análise, recebendo o DataHandler."""
         self.handler = data_handler
 
     def get_total_alunos(self, status='Ativo'):
-        """Retorna o número total de alunos com um determinado status."""
         df_alunos = self.handler.get_data('alunos')
         if df_alunos.empty:
             return 0
         return df_alunos[df_alunos['status'] == status].shape[0]
 
-    def get_novas_matriculas_por_mes(self, ano):
-        """Retorna o número de novas matrículas por mês para um dado ano."""
-        df_matriculas = self.handler.get_data('matriculas')
-        if df_matriculas.empty:
+    def get_novas_matriculas_por_mes(self, start_date, end_date):
+        # (Este método continua o mesmo)
+        df_alunos = self.handler.get_data('alunos')
+        if df_alunos.empty or 'data_cadastro' not in df_alunos.columns:
             return pd.DataFrame(columns=['mes', 'novas_matriculas'])
-        
-        # Converte a coluna para datetime e filtra pelo ano
-        df_matriculas['data_matricula'] = pd.to_datetime(df_matriculas['data_matricula'])
-        df_ano = df_matriculas[df_matriculas['data_matricula'].dt.year == int(ano)].copy()
-        
-        if df_ano.empty:
+        df_alunos['data_cadastro'] = pd.to_datetime(df_alunos['data_cadastro'], errors='coerce')
+        start_date_dt = pd.to_datetime(start_date)
+        end_date_dt = pd.to_datetime(end_date)
+        mask = (df_alunos['data_cadastro'] >= start_date_dt) & (df_alunos['data_cadastro'] <= end_date_dt)
+        df_periodo = df_alunos.loc[mask].copy()
+        if df_periodo.empty:
             return pd.DataFrame(columns=['mes', 'novas_matriculas'])
-
-        # Agrupa por mês
-        df_ano['mes'] = df_ano['data_matricula'].dt.strftime('%Y-%m')
-        novas_matriculas = df_ano.groupby('mes').size().reset_index(name='novas_matriculas')
+        df_periodo['mes'] = df_periodo['data_cadastro'].dt.strftime('%Y-%m')
+        novas_matriculas = df_periodo.groupby('mes').size().reset_index(name='novas_matriculas')
         return novas_matriculas.sort_values('mes')
 
-    def get_alunos_por_instrumento(self):
-        """Retorna a contagem de alunos matriculados por instrumento (exemplo com JOIN)."""
-        df_matriculas = self.handler.get_data('matriculas')
-        df_aulas = self.handler.get_data('aulas_ofertadas')
-        df_instrumentos = self.handler.get_data('instrumentos')
+    # --- NOVA FUNÇÃO ADICIONADA ---
+    def get_churn_kpis(self):
+        """
+        Calcula a taxa de evasão geral (lifetime).
+        Retorna um dicionário com o total de alunos inativos e a taxa de evasão.
+        """
+        df_alunos = self.handler.get_data('alunos')
+        if df_alunos.empty:
+            return {"inativos": 0, "taxa_evasao": 0.0}
 
-        if df_matriculas.empty or df_aulas.empty or df_instrumentos.empty:
-            return pd.DataFrame()
+        total_alunos = len(df_alunos)
+        alunos_inativos = len(df_alunos[df_alunos['status'] == 'Inativo'])
 
-        # Simulando o JOIN com pd.merge
-        matriculas_ativas = df_matriculas[df_matriculas['status'] == 'Ativa']
-        merge1 = pd.merge(matriculas_ativas, df_aulas, left_on='aula_ofertada_id', right_on='id', suffixes=('', '_aula'))
-        merge2 = pd.merge(merge1, df_instrumentos, left_on='instrumento_id', right_on='id', suffixes=('', '_instr'))
+        taxa_evasao = (alunos_inativos / total_alunos) * 100 if total_alunos > 0 else 0
 
-        # Agrupando e contando
-        resultado = merge2.groupby('nome_instrumento')['aluno_id'].nunique().reset_index(name='total_alunos')
-        return resultado.sort_values('total_alunos', ascending=False)
-    
-    # Adapte o `run_all_analysis` para retornar os dados, como sugerido anteriormente.
+        return {
+            "inativos": alunos_inativos,
+            "taxa_evasao": taxa_evasao
+        }

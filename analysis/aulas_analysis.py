@@ -1,105 +1,55 @@
 # analysis/aulas_analysis.py
-
 import pandas as pd
 
 class AulasAnalysis:
     def __init__(self, data_handler):
-        """
-        Inicializa a classe de análise de aulas, recebendo o DataHandler.
-        """
         self.handler = data_handler
-        print("Analisador de Aulas (Modo Pandas) inicializado.")
 
-    def get_total_aulas_por_status(self, ano):
-        """
-        Retorna o total de aulas agendadas por status (Agendada, Concluída, Cancelada) para um dado ano.
-        Lógica SQL: SELECT status, COUNT(id) FROM agenda_aulas WHERE YEAR(data_aula) = ano GROUP BY status.
-        """
+    def _filter_aulas_by_date(self, start_date, end_date, status_filter=None):
         df_agenda = self.handler.get_data('agenda_aulas')
         if df_agenda.empty:
+            return pd.DataFrame()
+        
+        df_agenda['data_aula'] = pd.to_datetime(df_agenda['data_aula'], errors='coerce')
+        start_date_dt = pd.to_datetime(start_date)
+        end_date_dt = pd.to_datetime(end_date)
+        
+        mask = (df_agenda['data_aula'] >= start_date_dt) & (df_agenda['data_aula'] <= end_date_dt)
+        df_periodo = df_agenda.loc[mask]
+        
+        if status_filter and not df_periodo.empty:
+            df_periodo = df_periodo[df_periodo['status'].isin(status_filter)]
+            
+        return df_periodo
+
+    def get_total_aulas_por_status(self, start_date, end_date):
+        df_periodo = self._filter_aulas_by_date(start_date, end_date)
+        if df_periodo.empty:
             return pd.DataFrame(columns=['status', 'total_aulas'])
+        return df_periodo.groupby('status').size().reset_index(name='total_aulas')
 
-        # Garante que a coluna de data é do tipo datetime
-        df_agenda['data_aula'] = pd.to_datetime(df_agenda['data_aula'])
-        
-        # 1. Filtra o DataFrame pelo ano desejado
-        df_ano = df_agenda[df_agenda['data_aula'].dt.year == int(ano)]
-        
-        # 2. Agrupa por 'status' e conta o número de ocorrências
-        resultado = df_ano.groupby('status').size().reset_index(name='total_aulas')
-        
-        return resultado
-
-    def get_popularidade_instrumentos(self):
-        """
-        Retorna a popularidade dos instrumentos com base no número de aulas agendadas.
-        Lógica SQL: SELECT i.nome_instrumento, COUNT(aa.id) FROM agenda_aulas aa JOIN instrumentos i ON aa.instrumento_id = i.id GROUP BY i.nome_instrumento.
-        """
-        df_agenda = self.handler.get_data('agenda_aulas')
+    def get_popularidade_instrumentos(self, start_date, end_date):
+        df_periodo = self._filter_aulas_by_date(start_date, end_date)
         df_instrumentos = self.handler.get_data('instrumentos')
-
-        if df_agenda.empty or df_instrumentos.empty:
-            return pd.DataFrame(columns=['nome_instrumento', 'total_aulas_agendadas'])
-
-        # 1. Junta (merge) os dois DataFrames
-        df_merged = pd.merge(df_agenda, df_instrumentos, left_on='instrumento_id', right_on='id')
-
-        # 2. Agrupa pelo nome do instrumento e conta as aulas
-        resultado = df_merged.groupby('nome_instrumento').size().reset_index(name='total_aulas_agendadas')
+        if df_periodo.empty or df_instrumentos.empty:
+            return pd.DataFrame()
         
-        # 3. Ordena do mais popular para o menos popular
+        df_merged = pd.merge(df_periodo, df_instrumentos, left_on='instrumento_id', right_on='id')
+        resultado = df_merged.groupby('nome_instrumento').size().reset_index(name='total_aulas_agendadas')
         return resultado.sort_values('total_aulas_agendadas', ascending=False)
 
-    def get_aulas_por_professor(self, ano):
-        """
-        Retorna o número de aulas concluídas por professor para um dado ano.
-        Lógica SQL: SELECT p.nome, COUNT(aa.id) FROM agenda_aulas aa JOIN professores p ON ... WHERE aa.status = 'Concluída' AND YEAR(data_aula) = ano GROUP BY p.nome.
-        """
-        df_agenda = self.handler.get_data('agenda_aulas')
-        df_professores = self.handler.get_data('professores')
-
-        if df_agenda.empty or df_professores.empty:
-            return pd.DataFrame(columns=['nome_professor', 'aulas_concluidas'])
-
-        df_agenda['data_aula'] = pd.to_datetime(df_agenda['data_aula'])
-        
-        # 1. Filtra a agenda por aulas 'Concluída' e pelo ano
-        filtro = (df_agenda['status'] == 'Concluída') & (df_agenda['data_aula'].dt.year == int(ano))
-        df_agenda_filtrada = df_agenda[filtro]
-
-        # 2. Junta com o DataFrame de professores
-        df_merged = pd.merge(df_agenda_filtrada, df_professores, left_on='professor_id', right_on='id')
-        
-        # 3. Agrupa pelo nome do professor e conta as aulas
-        resultado = df_merged.groupby('nome').size().reset_index(name='aulas_concluidas')
-        resultado = resultado.rename(columns={'nome': 'nome_professor'})
-        
-        return resultado.sort_values('aulas_concluidas', ascending=False)
-
-    def get_ocupacao_horarios_professor(self, professor_id=None, ano='2024'):
-        """
-        Analisa a ocupação de horários, contando a média de aulas por dia útil.
-        """
-        df_agenda = self.handler.get_data('agenda_aulas')
-        if df_agenda.empty:
-            return 0
-
-        df_agenda['data_aula'] = pd.to_datetime(df_agenda['data_aula'])
-        
-        # 1. Filtra por ano
-        df_filtrada = df_agenda[df_agenda['data_aula'].dt.year == int(ano)]
-        
-        # 2. Filtro opcional por professor
-        if professor_id:
-            df_filtrada = df_filtrada[df_filtrada['professor_id'] == int(professor_id)]
-
-        if df_filtrada.empty:
-            return 0
-            
-        # 3. Conta aulas por dia
-        aulas_por_dia = df_filtrada.groupby(df_filtrada['data_aula'].dt.date).size()
-        
-        # 4. Calcula a média
-        media_aulas_dia = aulas_por_dia.mean()
-        
-        return media_aulas_dia if pd.notna(media_aulas_dia) else 0
+    def get_peak_hours_data(self, start_date, end_date):
+        # (Este método já está correto)
+        df_periodo = self._filter_aulas_by_date(start_date, end_date)
+        if df_periodo.empty:
+            return pd.DataFrame()
+        # ... resto do código ...
+        df_periodo['dia_semana_num'] = df_periodo['data_aula'].dt.weekday
+        df_periodo['dia_semana_nome'] = df_periodo['data_aula'].dt.day_name(locale='pt_BR.utf8')
+        df_periodo['hora_aula'] = pd.to_datetime(df_periodo['hora_inicio'], format='%H:%M:%S', errors='coerce').dt.hour
+        heatmap_data = df_periodo.pivot_table(index=['dia_semana_num', 'dia_semana_nome'], columns='hora_aula', values='id', aggfunc='count', fill_value=0)
+        dias_ordem = {0: 'Segunda-feira', 1: 'Terça-feira', 2: 'Quarta-feira', 3: 'Quinta-feira', 4: 'Sexta-feira', 5: 'Sábado', 6: 'Domingo'}
+        heatmap_data = heatmap_data.reset_index().set_index('dia_semana_num').rename(columns={'dia_semana_nome':''}).reindex(range(7)).fillna(0)
+        heatmap_data[''] = heatmap_data.index.map(dias_ordem)
+        heatmap_data = heatmap_data.set_index('')
+        return heatmap_data
